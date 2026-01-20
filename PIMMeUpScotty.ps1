@@ -17,13 +17,44 @@
     - Microsoft.Graph.Users
     - Microsoft.Graph.Identity.Governance
 
+.PARAMETER Setup
+    Run the setup wizard to check and install required PowerShell modules and configure the script.
+
+.PARAMETER ListOnly
+    Only list eligible roles without activating them.
+
+.PARAMETER ScanAll
+    Scan ALL Azure resources to find eligible roles (diagnostic mode).
+
+.PARAMETER ResourceScope
+    Scan a specific resource scope (e.g., resource ID or path).
+
+.PARAMETER AADDurationHours
+    Duration in hours for Azure AD role activations (default: 8).
+
+.PARAMETER AzureDurationHours
+    Duration in hours for Azure Resource role activations (default: 8).
+
+.EXAMPLE
+    .\PIMMeUpScotty.ps1 -Setup
+    Runs the setup wizard to install modules and configure the script.
+
 .EXAMPLE
     .\PIMMeUpScotty.ps1
     Activates all configured PIM roles for daily work.
+
+.EXAMPLE
+    .\PIMMeUpScotty.ps1 -ListOnly
+    Lists all eligible roles without activating them.
+
+.EXAMPLE
+    .\PIMMeUpScotty.ps1 -ScanAll
+    Scans all Azure resources to discover eligible roles.
 #>
 
 [CmdletBinding()]
 param(
+    [switch]$Setup,     # Run setup wizard to check modules and configure
     [switch]$ListOnly,  # Only list eligible roles without activating
     [switch]$ScanAll,   # Scan ALL Azure resources to find eligible roles
     [string]$ResourceScope,  # Scan a specific resource scope (e.g., resource ID or path)
@@ -45,91 +76,168 @@ $AADRolesToActivate = @()
 $AzureResourcesToActivate = @()
 #endregion Configuration
 
+#region Setup Functions
+function Invoke-Setup {
+    Write-Host "`n╔════════════════════════════════════════════╗" -ForegroundColor Cyan
+    Write-Host "║        PIMMeUpScotty Setup Wizard          ║" -ForegroundColor Cyan
+    Write-Host "╚════════════════════════════════════════════╝" -ForegroundColor Cyan
+    Write-Host ""
+    
+    # Step 1: Check and install required modules
+    Write-Host "Step 1: Checking Required PowerShell Modules" -ForegroundColor Yellow
+    Write-Host "═══════════════════════════════════════════════" -ForegroundColor Yellow
+    Write-Host ""
+    
+    $requiredModules = @(
+        'Az.Accounts'
+        'Az.Resources'
+        'Microsoft.Graph.Authentication'
+        'Microsoft.Graph.Users'
+        'Microsoft.Graph.Identity.Governance'
+    )
+    
+    $modulesInstalled = 0
+    $modulesAlreadyPresent = 0
+    
+    foreach ($moduleName in $requiredModules) {
+        Write-Host "  Checking: $moduleName..." -ForegroundColor Cyan -NoNewline
+        
+        $module = Get-Module -ListAvailable -Name $moduleName | Select-Object -First 1
+        
+        if ($module) {
+            Write-Host " ✓ Found (v$($module.Version))" -ForegroundColor Green
+            $modulesAlreadyPresent++
+        }
+        else {
+            Write-Host " ✗ Not found" -ForegroundColor Red
+            Write-Host "    Installing $moduleName..." -ForegroundColor Yellow
+            
+            try {
+                Install-Module -Name $moduleName -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
+                $installedModule = Get-Module -ListAvailable -Name $moduleName | Select-Object -First 1
+                Write-Host "    ✓ Installed successfully (v$($installedModule.Version))" -ForegroundColor Green
+                $modulesInstalled++
+            }
+            catch {
+                Write-Host "    ✗ Failed to install: $_" -ForegroundColor Red
+                Write-Error "Failed to install required module: $moduleName"
+                return $false
+            }
+        }
+    }
+    
+    Write-Host ""
+    Write-Host "Module Check Summary:" -ForegroundColor Green
+    Write-Host "  Already present: $modulesAlreadyPresent" -ForegroundColor Gray
+    if ($modulesInstalled -gt 0) {
+        Write-Host "  Newly installed: $modulesInstalled" -ForegroundColor Gray
+    }
+    Write-Host ""
+    
+    # Step 2: Configuration setup
+    Write-Host "Step 2: Configuration Setup" -ForegroundColor Yellow
+    Write-Host "═══════════════════════════════════════════════" -ForegroundColor Yellow
+    Write-Host ""
+    
+    # Check if config already exists
+    if (Test-Path $ConfigFilePath) {
+        Write-Host "Existing configuration found at: $ConfigFilePath" -ForegroundColor Yellow
+        $overwrite = Read-Host "Do you want to overwrite it? (y/N)"
+        if ($overwrite -ne 'y' -and $overwrite -ne 'Y') {
+            Write-Host "Setup cancelled. Existing configuration preserved." -ForegroundColor Cyan
+            return $true
+        }
+        Write-Host ""
+    }
+    
+    # Prompt for required information
+    Write-Host "Required Information:" -ForegroundColor Green
+    $tenantId = Read-Host "Enter your Azure Tenant ID"
+    if ([string]::IsNullOrWhiteSpace($tenantId)) {
+        Write-Error "Tenant ID is required"
+        return $false
+    }
+    
+    $subscriptionId = Read-Host "Enter your Azure Subscription ID"
+    if ([string]::IsNullOrWhiteSpace($subscriptionId)) {
+        Write-Error "Subscription ID is required"
+        return $false
+    }
+    
+    Write-Host "`nOptional Information (press Enter to use defaults):" -ForegroundColor Green
+    $tenantName = Read-Host "Tenant Name (optional)"
+    $subscriptionName = Read-Host "Subscription Name (optional)"
+    
+    Write-Host "`nJustification text will be shown when activating roles." -ForegroundColor Gray
+    Write-Host "Default: 'Daily operational work'" -ForegroundColor Gray
+    $justification = Read-Host "Custom justification text (press Enter for default)"
+    if ([string]::IsNullOrWhiteSpace($justification)) {
+        $justification = "Daily operational work"
+    }
+    
+    $durationStr = Read-Host "Maximum activation duration in hours (press Enter for 8)"
+    $maxDuration = 8
+    if (-not [string]::IsNullOrWhiteSpace($durationStr) -and [int]::TryParse($durationStr, [ref]$maxDuration)) {
+        # Use parsed value
+    } else {
+        $maxDuration = 8
+    }
+    
+    # Create config with provided values
+    $newConfig = @{
+        Scopes = @(
+            @{
+                TenantId = $tenantId
+                TenantName = if ($tenantName) { $tenantName } else { "" }
+                SubscriptionId = $subscriptionId
+                SubscriptionName = if ($subscriptionName) { $subscriptionName } else { "" }
+                ScopeId = $null
+                LandingZoneName = $null
+                ActivationMode = "AllEligible"
+                MaxDurationHours = $maxDuration
+                Roles = $null
+                AADRoles = @()
+            }
+        )
+        DefaultJustification = $justification
+    }
+    
+    # Save configuration
+    try {
+        $newConfig | ConvertTo-Json -Depth 10 | Set-Content -Path $ConfigFilePath -Force
+        Write-Host "`n✓ Configuration saved to: $ConfigFilePath" -ForegroundColor Green
+        Write-Host ""
+        Write-Host "╔════════════════════════════════════════════╗" -ForegroundColor Green
+        Write-Host "║          Setup Complete!                   ║" -ForegroundColor Green
+        Write-Host "╚════════════════════════════════════════════╝" -ForegroundColor Green
+        Write-Host ""
+        Write-Host "You can now run the script without -Setup to activate your PIM roles." -ForegroundColor Gray
+        Write-Host "Edit $ConfigFilePath to customize your configuration." -ForegroundColor Gray
+        Write-Host ""
+        return $true
+    }
+    catch {
+        Write-Error "Failed to save configuration: $_"
+        return $false
+    }
+}
+#endregion Setup Functions
+
 #region Configuration Loading
 function Load-Configuration {
     if (-not (Test-Path $ConfigFilePath)) {
-        Write-Host "`n════════════════════════════════════════════" -ForegroundColor Cyan
-        Write-Host "  Configuration Setup (First Run)" -ForegroundColor Cyan
-        Write-Host "════════════════════════════════════════════" -ForegroundColor Cyan
-        Write-Host "No configuration file found. Let's create one!" -ForegroundColor Yellow
+        Write-Host ""
+        Write-Host "No configuration file found. Running setup..." -ForegroundColor Yellow
         Write-Host ""
         
-        # Prompt for required information
-        Write-Host "Required Information:" -ForegroundColor Green
-        $tenantId = Read-Host "Enter your Azure Tenant ID"
-        if ([string]::IsNullOrWhiteSpace($tenantId)) {
-            Write-Error "Tenant ID is required"
-            exit 1
+        if (-not (Invoke-Setup)) {
+            Write-Error "Setup failed. Cannot continue."
+            return $false
         }
         
-        $subscriptionId = Read-Host "Enter your Azure Subscription ID"
-        if ([string]::IsNullOrWhiteSpace($subscriptionId)) {
-            Write-Error "Subscription ID is required"
-            exit 1
-        }
-        
-        Write-Host "`nOptional Information (press Enter to use defaults):" -ForegroundColor Green
-        $tenantName = Read-Host "Tenant Name (optional)"
-        $subscriptionName = Read-Host "Subscription Name (optional)"
-        
-        Write-Host "`nJustification text will be shown when activating roles." -ForegroundColor Gray
-        Write-Host "Default: 'Daily operational work'" -ForegroundColor Gray
-        $justification = Read-Host "Custom justification text (press Enter for default)"
-        if ([string]::IsNullOrWhiteSpace($justification)) {
-            $justification = "Daily operational work"
-        }
-        
-        $durationStr = Read-Host "Maximum activation duration in hours (press Enter for 8)"
-        $maxDuration = 8
-        if (-not [string]::IsNullOrWhiteSpace($durationStr) -and [int]::TryParse($durationStr, [ref]$maxDuration)) {
-            # Use parsed value
-        } else {
-            $maxDuration = 8
-        }
-        
-        # Create config with provided values
-        $newConfig = @{
-            Scopes = @(
-                @{
-                    TenantId = $tenantId
-                    TenantName = if ($tenantName) { $tenantName } else { "" }
-                    SubscriptionId = $subscriptionId
-                    SubscriptionName = if ($subscriptionName) { $subscriptionName } else { "" }
-                    ScopeId = $null
-                    LandingZoneName = $null
-                    ActivationMode = "AllEligible"
-                    MaxDurationHours = $maxDuration
-                    Roles = $null
-                    AADRoles = @()
-                }
-            )
-            DefaultJustification = $justification
-        }
-        
-        # Save configuration
-        try {
-            $newConfig | ConvertTo-Json -Depth 10 | Set-Content -Path $ConfigFilePath -Force
-            Write-Host "`n✓ Configuration saved to: $ConfigFilePath" -ForegroundColor Green
-            Write-Host "You can edit this file later to add more scopes or customize settings." -ForegroundColor Gray
-            Write-Host ""
-            
-            # Load the newly created config
-            $script:TenantID = $tenantId
-            $script:SubscriptionID = $subscriptionId
-            $script:DefaultJustification = $justification
-            $script:AADRolesToActivate = @()
-            $script:AzureResourcesToActivate = @(
-                @{
-                    ScopeType = "Subscription"
-                    ScopeId = "/subscriptions/$subscriptionId"
-                    RolesToActivate = @()
-                    MaxDurationHours = $maxDuration
-                }
-            )
-            return $true
-        }
-        catch {
-            Write-Error "Failed to save configuration: $_"
+        # After setup, the config file should exist, so reload
+        if (-not (Test-Path $ConfigFilePath)) {
+            Write-Error "Configuration file was not created. Setup may have failed."
             return $false
         }
     }
@@ -341,18 +449,36 @@ function Update-RoleHistory {
     
     $history = $State.activationHistory.$RoleType
     
-    if (-not $history.$RoleKey) {
-        $history.$RoleKey = @{
-            lastActivated = $null
-            expiresAt = $null
-            optimalDuration = 0
-            consecutiveFailures = 0
-            totalActivations = 0
-            totalFailures = 0
+    # Handle both hashtables (new state) and PSObjects (loaded from JSON)
+    $roleHistory = $null
+    if ($history -is [hashtable]) {
+        if (-not $history.ContainsKey($RoleKey)) {
+            $history[$RoleKey] = @{
+                lastActivated = $null
+                expiresAt = $null
+                optimalDuration = 0
+                consecutiveFailures = 0
+                totalActivations = 0
+                totalFailures = 0
+            }
+        }
+        $roleHistory = $history[$RoleKey]
+    }
+    else {
+        # PSObject from JSON
+        $roleHistory = $history.PSObject.Properties[$RoleKey]?.Value
+        if (-not $roleHistory) {
+            $roleHistory = [PSCustomObject]@{
+                lastActivated = $null
+                expiresAt = $null
+                optimalDuration = 0
+                consecutiveFailures = 0
+                totalActivations = 0
+                totalFailures = 0
+            }
+            $history | Add-Member -MemberType NoteProperty -Name $RoleKey -Value $roleHistory -Force
         }
     }
-    
-    $roleHistory = $history.$RoleKey
     
     if ($Success) {
         $now = Get-Date
@@ -385,8 +511,18 @@ function Get-OptimalDuration {
     
     $history = $State.activationHistory.$RoleType
     
-    if ($history.$RoleKey -and $history.$RoleKey.optimalDuration -gt 0) {
-        $optimal = $history.$RoleKey.optimalDuration
+    # Handle both hashtables (new state) and PSObjects (loaded from JSON)
+    $roleHistory = $null
+    if ($history -is [hashtable]) {
+        $roleHistory = $history[$RoleKey]
+    }
+    else {
+        # PSObject from JSON
+        $roleHistory = $history.PSObject.Properties[$RoleKey]?.Value
+    }
+    
+    if ($roleHistory -and $roleHistory.optimalDuration -gt 0) {
+        $optimal = $roleHistory.optimalDuration
         Write-Log "Using optimal duration of ${optimal}h for $RoleKey (learned from previous runs)"
         return $optimal
     }
@@ -812,6 +948,11 @@ function Activate-AzureResourceRole {
 
 #region Main Execution
 try {
+    # Handle -Setup parameter
+    if ($Setup) {
+        exit (Invoke-Setup | ForEach-Object { if ($_) { 0 } else { 1 } })
+    }
+    
     $startTime = Get-Date
     Write-Host ""
     Write-Host "  /\     PIM Me Up, Scotty!" -ForegroundColor Cyan
@@ -864,7 +1005,8 @@ try {
                 $roleKey = $role.RoleName
                 
                 # Check if role is still active from previous run
-                $roleHistory = $state.activationHistory.aad.$roleKey
+                $history = $state.activationHistory.aad
+                $roleHistory = if ($history -is [hashtable]) { $history[$roleKey] } else { $history.PSObject.Properties[$roleKey]?.Value }
                 if ($roleHistory -and (Test-RoleStillActive $roleHistory)) {
                     Write-Host "  ⊙ Skipping: $($role.RoleName) (still active)" -ForegroundColor Cyan
                     Write-Log "Skipped $($role.RoleName) - still active from previous run"
@@ -1029,7 +1171,8 @@ try {
                 $roleKey = "$($resourceConfig.ScopeType)/$($resourceConfig.ScopeId)/Owner"
                 
                 # Check if role is still active from previous run
-                $roleHistory = $state.activationHistory.azure.$roleKey
+                $history = $state.activationHistory.azure
+                $roleHistory = if ($history -is [hashtable]) { $history[$roleKey] } else { $history.PSObject.Properties[$roleKey]?.Value }
                 if ($roleHistory -and (Test-RoleStillActive $roleHistory)) {
                     Write-Host "  ⊙ Skipping: Owner (still active)" -ForegroundColor Cyan
                     Write-Log "Skipped Owner at $($resourceConfig.ScopeId) - still active from previous run"

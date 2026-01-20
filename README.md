@@ -25,7 +25,7 @@ PIMMeUpScotty simplifies the daily workflow of activating your eligible Azure AD
 
 ### Required PowerShell Modules
 
-The script automatically installs missing modules:
+The following PowerShell modules are required:
 
 - `Az.Accounts`
 - `Az.Resources`
@@ -33,22 +33,38 @@ The script automatically installs missing modules:
 - `Microsoft.Graph.Users`
 - `Microsoft.Graph.Identity.Governance`
 
+**The setup wizard automatically checks and installs any missing modules.**
+
 ## Installation
 
 1. Download or clone the script to your local machine
 2. Open PowerShell (no need to run as Administrator)
 3. Navigate to the script directory
-4. Run the script for the first time to create initial configuration
+4. Run the setup wizard:
+
+```powershell
+.\PIMMeUpScotty.ps1 -Setup
+```
+
+The setup wizard will:
+- Check for required PowerShell modules and install any that are missing
+- Display version information for modules already installed
+- Prompt you to configure Tenant ID, Subscription ID, and other settings
+- Create the `pim-config.json` configuration file
+
+**Alternatively**, just run the script without parameters on first use:
 
 ```powershell
 .\PIMMeUpScotty.ps1
 ```
 
+If no configuration exists, the setup wizard will run automatically.
+
 ## Configuration
 
-### First Run Setup
+### Setup Wizard
 
-On first run, the script will prompt you for:
+The setup wizard (`-Setup` parameter or automatic first run) will prompt you for:
 
 - **Tenant ID**: Your Azure AD tenant identifier
 - **Subscription ID**: Your default Azure subscription
@@ -122,6 +138,41 @@ Add multiple scope objects to activate roles at different levels:
 ```
 
 ## Usage
+
+### Run Setup
+
+Run the setup wizard to install modules and configure the script:
+
+```powershell
+.\PIMMeUpScotty.ps1 -Setup
+```
+
+Setup output:
+```
+╔════════════════════════════════════════════╗
+║        PIMMeUpScotty Setup Wizard          ║
+╚════════════════════════════════════════════╝
+
+Step 1: Checking Required PowerShell Modules
+═══════════════════════════════════════════════
+
+  Checking: Az.Accounts... ✓ Found (v3.0.0)
+  Checking: Az.Resources... ✓ Found (v7.0.0)
+  Checking: Microsoft.Graph.Authentication... ✗ Not found
+    Installing Microsoft.Graph.Authentication...
+    ✓ Installed successfully (v2.10.0)
+  ...
+
+Module Check Summary:
+  Already present: 4
+  Newly installed: 1
+
+Step 2: Configuration Setup
+═══════════════════════════════════════════════
+
+Required Information:
+...
+```
 
 ### Basic Usage
 
@@ -268,7 +319,16 @@ Register-ScheduledTask -Action $action -Trigger $trigger -Principal $principal -
 
 ## Examples
 
-### Example 1: Daily Morning Activation
+### Example 1: Initial Setup
+
+```powershell
+# Run setup wizard
+.\PIMMeUpScotty.ps1 -Setup
+```
+
+The wizard will check modules, install missing ones, and guide you through configuration.
+
+### Example 2: Daily Morning Activation
 
 ```powershell
 # Run at the start of your workday
@@ -277,6 +337,10 @@ Register-ScheduledTask -Action $action -Trigger $trigger -Principal $principal -
 
 Output:
 ```
+  /\     PIM Me Up, Scotty!
+ /  \    -------------------------
+/____\   Azure PIM Role Assignment
+
 ✓ Configuration loaded
 === Connecting to Azure and Microsoft Graph ===
 Connected to Azure as: user@company.com
@@ -299,14 +363,14 @@ Failed activations: 0
 Execution time: 12.34 seconds
 ```
 
-### Example 2: Discovery Mode
+### Example 3: Discovery Mode
 
 ```powershell
 # Find all eligible roles
 .\PIMMeUpScotty.ps1 -ScanAll
 ```
 
-### Example 3: Quick Check
+### Example 4: Quick Check
 
 ```powershell
 # See what would be activated without activating
