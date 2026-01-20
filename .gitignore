@@ -1,3 +1,2 @@
-pim-activation.log
-pim-config.json
-pim-state.json
+*.log
+*.json
