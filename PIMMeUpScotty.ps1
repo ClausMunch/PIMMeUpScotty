@@ -813,9 +813,11 @@ function Activate-AzureResourceRole {
 #region Main Execution
 try {
     $startTime = Get-Date
-    Write-Host "`n╔════════════════════════════════════════════╗" -ForegroundColor Cyan
-    Write-Host "║     PIM Daily Activation Script           ║" -ForegroundColor Cyan
-    Write-Host "╚════════════════════════════════════════════╝" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "  /\     PIM Me Up, Scotty!" -ForegroundColor Cyan
+    Write-Host " /  \    -------------------------" -ForegroundColor Cyan
+    Write-Host "/____\   Azure PIM Role Assignment" -ForegroundColor Cyan
+    Write-Host ""
     
     Write-Log "=== PIM Activation Script Started ===" -Level Info
     
