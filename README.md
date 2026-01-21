@@ -190,20 +190,6 @@ View eligible roles without activating them:
 .\PIMMeUpScotty.ps1 -ListOnly
 ```
 
-### Scan All Resources
-
-Discover all eligible roles across your entire Azure environment:
-
-```powershell
-.\PIMMeUpScotty.ps1 -ScanAll
-```
-
-This diagnostic mode scans:
-- All subscriptions
-- All resource groups
-- All individual resources
-- Management groups (if accessible)
-
 ### Check Specific Resource
 
 Scan a specific Azure resource for eligible roles:
@@ -271,10 +257,10 @@ Disconnect-MgGraph
 
 ### No Eligible Roles Found
 
-Use diagnostic mode to verify your eligible roles:
+Use list mode to verify your eligible roles:
 
 ```powershell
-.\PIMMeUpScotty.ps1 -ScanAll
+.\PIMMeUpScotty.ps1 -ListOnly
 ```
 
 Compare results with the Azure Portal:
@@ -363,17 +349,10 @@ Failed activations: 0
 Execution time: 12.34 seconds
 ```
 
-### Example 3: Discovery Mode
+### Example 3: List Mode
 
 ```powershell
-# Find all eligible roles
-.\PIMMeUpScotty.ps1 -ScanAll
-```
-
-### Example 4: Quick Check
-
-```powershell
-# See what would be activated without activating
+# See what roles are eligible without activating
 .\PIMMeUpScotty.ps1 -ListOnly
 ```
 

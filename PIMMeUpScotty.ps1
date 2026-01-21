@@ -23,9 +23,6 @@
 .PARAMETER ListOnly
     Only list eligible roles without activating them.
 
-.PARAMETER ScanAll
-    Scan ALL Azure resources to find eligible roles (diagnostic mode).
-
 .PARAMETER ResourceScope
     Scan a specific resource scope (e.g., resource ID or path).
 
@@ -46,17 +43,12 @@
 .EXAMPLE
     .\PIMMeUpScotty.ps1 -ListOnly
     Lists all eligible roles without activating them.
-
-.EXAMPLE
-    .\PIMMeUpScotty.ps1 -ScanAll
-    Scans all Azure resources to discover eligible roles.
 #>
 
 [CmdletBinding()]
 param(
     [switch]$Setup,     # Run setup wizard to check modules and configure
     [switch]$ListOnly,  # Only list eligible roles without activating
-    [switch]$ScanAll,   # Scan ALL Azure resources to find eligible roles
     [string]$ResourceScope,  # Scan a specific resource scope (e.g., resource ID or path)
     [int]$AADDurationHours = 8,  # Duration for Azure AD roles
     [int]$AzureDurationHours = 8  # Duration for Azure Resource roles
@@ -290,6 +282,7 @@ function Load-Configuration {
                 $script:AzureResourcesToActivate += @{
                     ScopeType = "Subscription"
                     ScopeId = "/subscriptions/$($scope.SubscriptionId)"
+                    ResourceName = if ($scope.SubscriptionName) { $scope.SubscriptionName } else { $scope.SubscriptionId }
                     RolesToActivate = if ($scope.Roles) { $scope.Roles } else { @() }
                     MaxDurationHours = if ($scope.MaxDurationHours) { $scope.MaxDurationHours } else { 8 }
                 }
@@ -298,8 +291,10 @@ function Load-Configuration {
             if ($scope.ScopeId) {
                 # Custom scope (could be management group, resource group, etc.)
                 $scopeType = "Subscription"
+                $resourceName = $scope.ScopeId
                 if ($scope.ScopeId -match '/managementGroups/') {
                     $scopeType = "ManagementGroup"
+                    $resourceName = if ($scope.LandingZoneName) { $scope.LandingZoneName } else { $scope.ScopeId }
                 } elseif ($scope.ScopeId -match '/resourceGroups/') {
                     $scopeType = "ResourceGroup"
                 }
@@ -307,6 +302,7 @@ function Load-Configuration {
                 $script:AzureResourcesToActivate += @{
                     ScopeType = $scopeType
                     ScopeId = $scope.ScopeId
+                    ResourceName = $resourceName
                     RolesToActivate = if ($scope.Roles) { $scope.Roles } else { @() }
                     MaxDurationHours = if ($scope.MaxDurationHours) { $scope.MaxDurationHours } else { 8 }
                 }
@@ -1099,59 +1095,33 @@ try {
         return  # Exit after specific scan
     }
     
-    if ($ScanAll) {
-        # Diagnostic mode: scan everything
-        Write-Host "`n🔍 DIAGNOSTIC MODE: Scanning all Azure resources..." -ForegroundColor Magenta
-        $allAzureRoles = Get-AllEligibleAzureResourceRoles -UserId $currentUserId
-        
-        if ($allAzureRoles.Count -eq 0) {
-            Write-Host "`n❌ No eligible Azure Resource roles found anywhere." -ForegroundColor Red
-            Write-Host "This could mean:" -ForegroundColor Yellow
-            Write-Host "  1. You don't have any PIM-eligible assignments for Azure resources" -ForegroundColor White
-            Write-Host "  2. All eligible assignments might be at a different scope level" -ForegroundColor White
-            Write-Host "  3. Check the Azure Portal: https://portal.azure.com/#view/Microsoft_Azure_PIMCommon/ActivationMenuBlade/~/azurerbac" -ForegroundColor White
-        }
-        else {
-            Write-Host "`n✓ Found $($allAzureRoles.Count) eligible Azure Resource role(s):" -ForegroundColor Green
-            Write-Host ""
+    if ($AzureResourcesToActivate.Count -gt 0) {
+        if ($ListOnly) {
+            Write-Host "`n=== Eligible Azure Resource Roles ===" -ForegroundColor Cyan
+            Write-Log "Listing eligible Azure resource roles"
             
-            $grouped = $allAzureRoles | Group-Object ScopeType
-            foreach ($group in $grouped) {
-                Write-Host "  $($group.Name):" -ForegroundColor Cyan
-                foreach ($role in $group.Group) {
-                    Write-Host "    ├─ Scope: $($role.ScopeName)" -ForegroundColor Gray
-                    Write-Host "    │  Role: $($role.RoleName)" -ForegroundColor Yellow
-                    Write-Host "    │  Path: $($role.Scope)" -ForegroundColor DarkGray
-                    Write-Host ""
+            foreach ($resourceConfig in $AzureResourcesToActivate) {
+                $scopeDisplay = if ($resourceConfig.ResourceName) { "$($resourceConfig.ScopeType): $($resourceConfig.ResourceName)" } else { "$($resourceConfig.ScopeType) - $($resourceConfig.ScopeId)" }
+                Write-Host "`nScope: $scopeDisplay" -ForegroundColor Yellow
+                
+                # Get eligible roles for this scope
+                $eligibleRoles = Get-EligibleAzureResourceRoles -UserId $currentUserId -Scope $resourceConfig.ScopeId
+                
+                if ($eligibleRoles.Count -gt 0) {
+                    foreach ($role in $eligibleRoles) {
+                        Write-Host "  - $($role.RoleName)" -ForegroundColor Gray
+                    }
+                } else {
+                    Write-Host "  No eligible roles found" -ForegroundColor DarkGray
                 }
             }
+        } else {
+            Write-Host "`n=== Activating Azure Resource Roles ===" -ForegroundColor Cyan
+            Write-Log "Processing $($AzureResourcesToActivate.Count) Azure resource scope(s)"
             
-            Write-Host "`n📝 To activate these roles daily, update your configuration:" -ForegroundColor Cyan
-            Write-Host "`$AzureResourcesToActivate = @(" -ForegroundColor White
-            
-            $uniqueScopes = $allAzureRoles | Select-Object Scope, ScopeType, ScopeName -Unique
-            foreach ($scope in $uniqueScopes) {
-                Write-Host "    @{" -ForegroundColor White
-                Write-Host "        ScopeType = `"$($scope.ScopeType)`"" -ForegroundColor White
-                Write-Host "        ScopeId = `"$($scope.Scope)`"" -ForegroundColor White
-                Write-Host "        # ScopeName: $($scope.ScopeName)" -ForegroundColor DarkGray
-                Write-Host "        RolesToActivate = @()  # Empty = activate all eligible roles" -ForegroundColor White
-                Write-Host "    }" -ForegroundColor White
-            }
-            Write-Host ")" -ForegroundColor White
-        }
-        
-        return  # Exit after diagnostic scan
-    }
-    
-    if ($AzureResourcesToActivate.Count -gt 0) {
-        Write-Host "`n=== Activating Azure Resource Roles ===" -ForegroundColor Cyan
-        Write-Log "Processing $($AzureResourcesToActivate.Count) Azure resource scope(s)"
-        
-        foreach ($resourceConfig in $AzureResourcesToActivate) {
-            Write-Host "`nScope: $($resourceConfig.ScopeType) - $($resourceConfig.ScopeId)" -ForegroundColor Yellow
-            
-            if (-not $ListOnly) {
+            foreach ($resourceConfig in $AzureResourcesToActivate) {
+                $scopeDisplay = if ($resourceConfig.ResourceName) { "$($resourceConfig.ScopeType): $($resourceConfig.ResourceName)" } else { "$($resourceConfig.ScopeType) - $($resourceConfig.ScopeId)" }
+                Write-Host "`nScope: $scopeDisplay" -ForegroundColor Yellow
                 # Get Owner role definition ID
                 $ownerRoleDefId = (Get-AzRoleDefinition -Name "Owner").Id
                 
